@@ -1,0 +1,16 @@
+{
+  "name": "weather-notify",
+  "version": "1.0.0",
+  "description": "その日の天気・気温・湿度・傘の要否・洗濯物の判定を Discord チャンネルへ毎日通知するスクリプト",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "notify": "tsx src/notify.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.3"
+  }
+}
