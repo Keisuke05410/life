@@ -3,16 +3,19 @@
 
 import { writeFile } from "node:fs/promises";
 import { getTodayWeather } from "./weather.js";
+import { getGarbage } from "./garbage.js";
 import { buildDashboardHtml } from "./dashboard.js";
 import { renderPng } from "./render.js";
 
 async function main(): Promise<void> {
   const out = process.argv[2] ?? "preview.png";
   const result = await getTodayWeather();
-  const png = await renderPng(buildDashboardHtml(result));
+  const garbage = getGarbage();
+  const png = await renderPng(buildDashboardHtml(result, garbage));
   await writeFile(out, png);
+  const todayCats = garbage.today.categories.map((c) => c.label).join("・") || "なし";
   console.log(
-    `プレビューを書き出しました: ${out}（${result.location} / ${result.weather} / 洗濯 ${result.laundry.level}）`,
+    `プレビューを書き出しました: ${out}（${result.location} / ${result.weather} / 洗濯 ${result.laundry.level} / ゴミ ${todayCats}）`,
   );
 }
 

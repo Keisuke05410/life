@@ -1,7 +1,7 @@
 {
-  "name": "weather-notify",
+  "name": "daily-notify",
   "version": "1.0.0",
-  "description": "その日の天気・気温・降水確率（朝昼夜）と洗濯物アドバイスを 1 枚のダッシュボード画像にして Discord チャンネルへ毎日通知するスクリプト",
+  "description": "その日の天気・気温・降水確率（朝昼夜）・洗濯物アドバイス・ゴミ出し（今日／明日）を 1 枚のダッシュボード画像にして Discord チャンネルへ毎日通知するスクリプト",
   "private": true,
   "type": "module",
   "scripts": {

@@ -7,6 +7,7 @@
 //   DISCORD_WEBHOOK_URL … 投稿先チャンネルの Webhook URL
 
 import { getTodayWeather, type WeatherResult } from "./weather.js";
+import { getGarbage, type GarbageInfo } from "./garbage.js";
 import { buildDashboardHtml } from "./dashboard.js";
 import { renderPng } from "./render.js";
 
@@ -25,10 +26,12 @@ function summaryEmoji(weather: string): string {
 const fmtTemp = (v: number | null) => (v == null ? "—" : `${Math.round(v)}°`);
 
 /** 通知プレビュー用の 1 行要約 */
-function buildSummary(r: WeatherResult): string {
+function buildSummary(r: WeatherResult, g: GarbageInfo): string {
   const mainWord = r.weather.split(/\s/)[0] || r.weather;
   const temps = `${fmtTemp(r.temperatureMax)}/${fmtTemp(r.temperatureMin)}`;
-  return `${summaryEmoji(mainWord)} ${r.location} ${r.weather} ${temps}・洗濯: ${r.laundry.level}(${r.laundry.index})`;
+  const garbage =
+    g.today.categories.map((c) => c.label).join("・") || "なし";
+  return `${summaryEmoji(mainWord)} ${r.location} ${r.weather} ${temps}・洗濯: ${r.laundry.level}(${r.laundry.index})・ゴミ: ${garbage}`;
 }
 
 /** 画像 1 枚 + テキストを multipart/form-data で Webhook へ送信 */
@@ -65,8 +68,9 @@ async function main(): Promise<void> {
   }
 
   const result = await getTodayWeather();
-  const png = await renderPng(buildDashboardHtml(result));
-  await postImage(webhookUrl, png, buildSummary(result));
+  const garbage = getGarbage();
+  const png = await renderPng(buildDashboardHtml(result, garbage));
+  await postImage(webhookUrl, png, buildSummary(result, garbage));
 
   console.log(
     `Discord へ通知しました: ${result.location} / ${result.weather}（洗濯: ${result.laundry.level}）`,

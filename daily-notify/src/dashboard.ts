@@ -6,6 +6,7 @@
 // この HTML を render.ts の Playwright で #card 要素だけ PNG 化する。
 
 import type { WeatherResult, PeriodWeather } from "./weather.js";
+import type { GarbageInfo, DayGarbage } from "./garbage.js";
 
 // ---- SVG アイコン（lucide のパス） ----
 
@@ -36,6 +37,18 @@ const ICON_PATHS: Record<string, string> = {
     '<path d="M12 22v-9"/><path d="M12 13a5.98 5.98 0 0 0-4.24 1.76M12 13a5.98 5.98 0 0 1 4.24 1.76"/><path d="M20 13a10.06 10.06 0 0 0-16 0"/><path d="M12 13V2"/><path d="M12 22a2 2 0 0 0 2-2"/>',
   clock:
     '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  "trash-2":
+    '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/>',
+  flame:
+    '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+  recycle:
+    '<path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5"/><path d="M11 19h8.203a1.83 1.83 0 0 0 1.556-.89 1.784 1.784 0 0 0 0-1.775l-1.226-2.12"/><path d="m14 16-3 3 3 3"/><path d="M8.293 13.596 7.196 9.5 3.1 10.598"/><path d="m9.344 5.811 1.093-1.892A1.83 1.83 0 0 1 11.985 3a1.784 1.784 0 0 1 1.546.888l3.943 6.843"/><path d="m13.378 9.633 4.096 1.098 1.097-4.096"/>',
+  "cup-soda":
+    '<path d="m6 8 1.75 12.28a2 2 0 0 0 2 1.72h4.54a2 2 0 0 0 2-1.72L18 8"/><path d="M5 8h14"/><path d="M7 15a6.47 6.47 0 0 1 5 0 6.47 6.47 0 0 0 5 0"/><path d="m12 8 1-6h2"/>',
+  newspaper:
+    '<path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8"/><path d="M15 18h-5"/><path d="M10 6h8v4h-8V6Z"/>',
+  wine:
+    '<path d="M8 22h8"/><path d="M7 10h10"/><path d="M12 15v7"/><path d="M12 15a5 5 0 0 0 5-5c0-2-.5-4-2-8H9c-1.5 4-2 6-2 8a5 5 0 0 0 5 5Z"/>',
 };
 
 /** 24x24 viewBox のラインアイコンを描く */
@@ -90,6 +103,68 @@ function laundryColors(index: number): { text: string; dot: string } {
   if (index >= 45) return { text: "#fbbf24", dot: "#f59e0b" };
   if (index >= 25) return { text: "#fb923c", dot: "#f97316" };
   return { text: "#f87171", dot: "#ef4444" };
+}
+
+// ---- ゴミ出しカテゴリ → アイコン・色 ----
+
+// 色は既存の役割色を再利用（新色は増やさない）:
+// 燃やす=警戒系(橙) / 資源(プラ・ペット・古紙・びん缶)=良好系(緑) / 燃やさない=ニュートラル
+const GARBAGE_ICON: Record<string, { name: string; color: string }> = {
+  burnable: { name: "flame", color: "#fb923c" },
+  unburnable: { name: "trash-2", color: COL.neutral },
+  plastic: { name: "recycle", color: "#4ade80" },
+  pet: { name: "cup-soda", color: "#4ade80" },
+  paper: { name: "newspaper", color: "#4ade80" },
+  "bottle-can": { name: "wine", color: "#4ade80" },
+};
+
+/** カテゴリのチップ列を組み立てる。size で今日(大)/明日(小)を出し分ける。 */
+function garbageChips(day: DayGarbage, size: "lg" | "sm"): string {
+  if (day.categories.length === 0) {
+    return `<span style="font-size:${size === "lg" ? 14 : 13}px;color:#71717a;">収集なし</span>`;
+  }
+  const iconSize = size === "lg" ? 16 : 14;
+  const fontSize = size === "lg" ? 14 : 12.5;
+  const pad = size === "lg" ? "7px 12px" : "5px 9px";
+  return day.categories
+    .map((c) => {
+      const gi = GARBAGE_ICON[c.key] ?? { name: "trash-2", color: COL.neutral };
+      // 明日は少し彩度を落として控えめに（透明度で一段沈める）
+      const opacity = size === "lg" ? "1" : "0.72";
+      return `<span style="display:inline-flex;align-items:center;gap:6px;background:#18181b;border:1px solid #27272a;border-radius:10px;padding:${pad};font-size:${fontSize}px;opacity:${opacity};">${icon(
+        gi.name,
+        iconSize,
+        gi.color,
+      )}<span>${esc(c.label)}</span></span>`;
+    })
+    .join("");
+}
+
+/** カード最上部のゴミ出しバナー（今日=メイン / 明日=サブ） */
+function garbageBanner(g: GarbageInfo): string {
+  const dayLabel = (d: DayGarbage) => `(${d.weekdayLabel})`;
+  return `
+    <div style="padding:16px 22px 15px;border-bottom:1px solid #18181b;">
+      <div style="display:flex;align-items:center;gap:7px;margin-bottom:12px;">
+        ${icon("trash-2", 16, "#71717a")}
+        <span style="font-size:12px;color:#71717a;letter-spacing:0.06em;">ゴミ出し</span>
+      </div>
+      <div style="display:flex;align-items:flex-start;gap:14px;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;color:#a1a1aa;margin-bottom:8px;">今日 <span style="color:#71717a;">${dayLabel(
+            g.today,
+          )}</span></div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;">${garbageChips(g.today, "lg")}</div>
+        </div>
+        <div style="width:1px;align-self:stretch;background:#27272a;"></div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;color:#71717a;margin-bottom:8px;">明日 <span style="color:#52525b;">${dayLabel(
+            g.tomorrow,
+          )}</span></div>
+          <div style="display:flex;flex-wrap:wrap;gap:7px;">${garbageChips(g.tomorrow, "sm")}</div>
+        </div>
+      </div>
+    </div>`;
 }
 
 // ---- フォーマッタ ----
@@ -151,7 +226,7 @@ function periodCard(key: "morning" | "afternoon" | "evening", label: string, hou
 
 // ---- ダッシュボード HTML ----
 
-export function buildDashboardHtml(r: WeatherResult): string {
+export function buildDashboardHtml(r: WeatherResult, g: GarbageInfo): string {
   const mainWord = r.weather.split(/\s/)[0] || r.weather;
   const hi = weatherIcon(mainWord);
   const l = r.laundry;
@@ -173,6 +248,7 @@ export function buildDashboardHtml(r: WeatherResult): string {
     svg{display:block;}
   </style></head><body>
   <div id="card">
+    ${garbageBanner(g)}
     <div style="display:flex;align-items:flex-start;justify-content:space-between;padding:20px 22px 18px;">
       <div>
         <div style="display:flex;align-items:center;gap:6px;font-size:15px;font-weight:500;">
