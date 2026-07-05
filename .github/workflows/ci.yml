@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths: ["daily-notify/**", ".github/workflows/ci.yml"]
+  pull_request:
+    paths: ["daily-notify/**", ".github/workflows/ci.yml"]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: daily-notify
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: daily-notify/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx biome ci

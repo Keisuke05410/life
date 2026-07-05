@@ -1,5 +1,7 @@
 // 武蔵野市（ユーザーの収集地区）のゴミ収集日を、収集ルールから決定的に算出する。
 // jma.ts と同様の独立モジュールだが、こちらは外部 fetch 不要（純粋関数のみ）。
+
+import { jstDate, WEEKDAY_JA } from "./lib.js";
 //
 // 収集ルール（2026年7月以降・ユーザー地区）:
 //   月: 古紙・古着（毎週） / ペットボトル（毎週・2026年7月から） / びん・缶・危険有害（隔週）
@@ -33,8 +35,6 @@ export interface GarbageInfo {
   today: DayGarbage;
   tomorrow: DayGarbage;
 }
-
-const WEEKDAY_JA = ["日", "月", "火", "水", "木", "金", "土"] as const;
 
 // カテゴリ定義（キーと日本語ラベルを一元管理）
 const CAT = {
@@ -85,20 +85,6 @@ function categoriesForDate(ymd: string, dow: number): GarbageCategory[] {
     if (diff % 14 === 0) cats.push(rule.category);
   }
   return cats;
-}
-
-/** offset 日後の JST 日付を { ymd, dow } で返す */
-function jstDate(base: Date, offsetDays: number): { ymd: string; dow: number } {
-  const shifted = new Date(base.getTime() + offsetDays * 86400000);
-  // JST の Y-M-D（en-CA は YYYY-MM-DD 形式）
-  const ymd = shifted.toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" });
-  // JST の曜日
-  const wd = shifted.toLocaleDateString("en-US", {
-    timeZone: "Asia/Tokyo",
-    weekday: "short",
-  });
-  const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(wd);
-  return { ymd, dow };
 }
 
 function buildDay(base: Date, offsetDays: number): DayGarbage {

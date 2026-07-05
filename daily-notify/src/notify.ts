@@ -6,31 +6,42 @@
 // 必要な環境変数:
 //   DISCORD_WEBHOOK_URL … 投稿先チャンネルの Webhook URL
 
-import { getTodayWeather, type WeatherResult } from "./weather.js";
-import { getGarbage, type GarbageInfo } from "./garbage.js";
 import { buildDashboardHtml } from "./dashboard.js";
+import { type GarbageInfo, getGarbage } from "./garbage.js";
+import {
+  fetchWithRetry,
+  fetchWithTimeout,
+  fmtTemp,
+  weatherKind,
+} from "./lib.js";
 import { renderPng } from "./render.js";
+import { getTodayWeather, type WeatherResult } from "./weather.js";
 
 /** テキスト要約の先頭に付ける天気絵文字（Discord が描画するので絵文字でよい） */
 function summaryEmoji(weather: string): string {
-  if (weather.includes("雷")) return "⛈️";
-  if (weather.includes("雪")) return "❄️";
-  if (weather.includes("雨") || weather.includes("霧雨")) return "🌧️";
-  if (weather.includes("霧")) return "🌫️";
-  if (weather.includes("曇")) return "☁️";
-  if (weather.includes("快晴")) return "☀️";
-  if (weather.includes("晴")) return "🌤️";
-  return "🌡️";
+  switch (weatherKind(weather)) {
+    case "thunder":
+      return "⛈️";
+    case "snow":
+      return "❄️";
+    case "rain":
+      return "🌧️";
+    case "fog":
+      return "🌫️";
+    case "cloud":
+      return "☁️";
+    case "clear":
+      return weather.includes("快晴") ? "☀️" : "🌤️";
+    default:
+      return "🌡️";
+  }
 }
-
-const fmtTemp = (v: number | null) => (v == null ? "—" : `${Math.round(v)}°`);
 
 /** 通知プレビュー用の 1 行要約 */
 function buildSummary(r: WeatherResult, g: GarbageInfo): string {
   const mainWord = r.weather.split(/\s/)[0] || r.weather;
   const temps = `${fmtTemp(r.temperatureMax)}/${fmtTemp(r.temperatureMin)}`;
-  const garbage =
-    g.today.categories.map((c) => c.label).join("・") || "なし";
+  const garbage = g.today.categories.map((c) => c.label).join("・") || "なし";
   return `${summaryEmoji(mainWord)} ${r.location} ${r.weather} ${temps}・洗濯: ${r.laundry.level}(${r.laundry.index})・ゴミ: ${garbage}`;
 }
 
@@ -40,31 +51,35 @@ async function postImage(
   png: Buffer,
   content: string,
 ): Promise<void> {
-  const form = new FormData();
-  form.append("payload_json", JSON.stringify({ content }));
-  form.append(
-    "files[0]",
-    new Blob([new Uint8Array(png)], { type: "image/png" }),
-    "weather.png",
-  );
+  const buildForm = () => {
+    const form = new FormData();
+    form.append("payload_json", JSON.stringify({ content }));
+    form.append(
+      "files[0]",
+      new Blob([new Uint8Array(png)], { type: "image/png" }),
+      "weather.png",
+    );
+    return form;
+  };
 
-  const res = await fetch(webhookUrl, { method: "POST", body: form });
+  // 通知の生命線なので、一時的な失敗（ネットワーク/5xx/429）はリトライする
+  const res = await fetchWithRetry(() =>
+    fetchWithTimeout(webhookUrl, { method: "POST", body: buildForm() }),
+  );
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    console.error(
+    throw new Error(
       `Discord への送信に失敗しました: ${res.status} ${res.statusText}\n${body}`,
     );
-    process.exit(1);
   }
 }
 
 async function main(): Promise<void> {
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
   if (!webhookUrl) {
-    console.error(
+    throw new Error(
       "環境変数 DISCORD_WEBHOOK_URL が設定されていません。Discord の Webhook URL を指定してください。",
     );
-    process.exit(1);
   }
 
   const result = await getTodayWeather();

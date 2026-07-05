@@ -7,12 +7,16 @@
   "scripts": {
     "notify": "tsx src/notify.ts",
     "preview": "tsx src/preview.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "biome lint",
+    "format": "biome format --write",
+    "check": "biome check"
   },
   "dependencies": {
     "playwright": "^1.49.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.2",
     "@types/node": "^22.10.0",
     "tsx": "^4.19.2",
     "typescript": "^5.8.3"

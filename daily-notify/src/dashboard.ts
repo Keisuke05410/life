@@ -5,8 +5,16 @@
 //
 // この HTML を render.ts の Playwright で #card 要素だけ PNG 化する。
 
-import type { WeatherResult, PeriodWeather } from "./weather.js";
-import type { GarbageInfo, DayGarbage } from "./garbage.js";
+import type { DayGarbage, GarbageInfo } from "./garbage.js";
+import {
+  fmtTemp,
+  jstDate,
+  PERIOD_DEFS,
+  type PeriodKey,
+  WEEKDAY_JA,
+  weatherKind,
+} from "./lib.js";
+import type { PeriodWeather, WeatherResult } from "./weather.js";
 
 // ---- SVG アイコン（lucide のパス） ----
 
@@ -24,8 +32,7 @@ const ICON_PATHS: Record<string, string> = {
     '<path d="M12 2v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="M20 12h2"/><path d="m19.07 4.93-1.41 1.41"/><path d="M15.947 12.65a4 4 0 0 0-5.925-4.128"/><path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z"/>',
   snowflake:
     '<path d="m10 20-1.25-2.5L6 18"/><path d="M10 4 8.75 6.5 6 6"/><path d="m14 20 1.25-2.5L18 18"/><path d="m14 4 1.25 2.5L18 6"/><path d="m17 21-3-6h-4"/><path d="m17 3-3 6 1.5 3"/><path d="M2 12h6.5L10 9"/><path d="m20 10-1.5 2 1.5 2"/><path d="M22 12h-6.5L14 15"/><path d="m4 10 1.5 2L4 14"/><path d="m7 21 3-6-1.5-3"/><path d="m7 3 3 6h4"/>',
-  sun:
-    '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
   moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
   "cloud-moon":
     '<path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z"/><path d="M10.1 9A6 6 0 0 1 16 4a4.24 4.24 0 0 0 6 6 6 6 0 0 1-3 5.197"/>',
@@ -47,8 +54,7 @@ const ICON_PATHS: Record<string, string> = {
     '<path d="m6 8 1.75 12.28a2 2 0 0 0 2 1.72h4.54a2 2 0 0 0 2-1.72L18 8"/><path d="M5 8h14"/><path d="M7 15a6.47 6.47 0 0 1 5 0 6.47 6.47 0 0 0 5 0"/><path d="m12 8 1-6h2"/>',
   newspaper:
     '<path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8"/><path d="M15 18h-5"/><path d="M10 6h8v4h-8V6Z"/>',
-  wine:
-    '<path d="M8 22h8"/><path d="M7 10h10"/><path d="M12 15v7"/><path d="M12 15a5 5 0 0 0 5-5c0-2-.5-4-2-8H9c-1.5 4-2 6-2 8a5 5 0 0 0 5 5Z"/>',
+  wine: '<path d="M8 22h8"/><path d="M7 10h10"/><path d="M12 15v7"/><path d="M12 15a5 5 0 0 0 5-5c0-2-.5-4-2-8H9c-1.5 4-2 6-2 8a5 5 0 0 0 5 5Z"/>',
 };
 
 /** 24x24 viewBox のラインアイコンを描く */
@@ -69,29 +75,36 @@ const COL = {
 /** 天気ラベルからアイコン名と色を選ぶ。period で快晴/晴の昼夜を出し分ける。 */
 function weatherIcon(
   weather: string | null,
-  period?: "morning" | "afternoon" | "evening",
+  period?: PeriodKey,
 ): { name: string; color: string } {
-  if (!weather) return { name: "cloud", color: COL.neutral };
-  if (weather.includes("雷")) return { name: "cloud-storm", color: COL.neutral };
-  if (weather.includes("雪")) return { name: "snowflake", color: COL.snow };
-  if (weather.includes("雨")) return { name: "cloud-rain", color: COL.rain };
-  if (weather.includes("霧")) return { name: "cloud-fog", color: COL.neutral };
-  if (weather.includes("曇"))
-    // 夜間の曇りは月＋雲で「夜」の雰囲気を残す
-    return period === "evening"
-      ? { name: "cloud-moon", color: COL.neutral }
-      : { name: "cloud", color: COL.neutral };
-  if (weather.includes("快晴") || weather.includes("晴")) {
-    // 一部曇り・晴時々曇りは cloud-sun。快晴/晴で夜間は月。
-    if (weather.includes("一部") || weather.includes("時々"))
+  switch (weatherKind(weather)) {
+    case "thunder":
+      return { name: "cloud-storm", color: COL.neutral };
+    case "snow":
+      return { name: "snowflake", color: COL.snow };
+    case "rain":
+      return { name: "cloud-rain", color: COL.rain };
+    case "fog":
+      return { name: "cloud-fog", color: COL.neutral };
+    case "cloud":
+      // 夜間の曇りは月＋雲で「夜」の雰囲気を残す
+      return period === "evening"
+        ? { name: "cloud-moon", color: COL.neutral }
+        : { name: "cloud", color: COL.neutral };
+    case "clear": {
+      const w = weather ?? "";
+      // 一部曇り・晴時々曇りは cloud-sun。快晴/晴で夜間は月。
+      if (w.includes("一部") || w.includes("時々"))
+        return period === "evening"
+          ? { name: "moon", color: COL.neutral }
+          : { name: "cloud-sun", color: COL.sun };
       return period === "evening"
         ? { name: "moon", color: COL.neutral }
-        : { name: "cloud-sun", color: COL.sun };
-    return period === "evening"
-      ? { name: "moon", color: COL.neutral }
-      : { name: "sun", color: COL.sun };
+        : { name: "sun", color: COL.sun };
+    }
+    default:
+      return { name: "cloud", color: COL.neutral };
   }
-  return { name: "cloud", color: COL.neutral };
 }
 
 // ---- 洗濯スコア → 色 ----
@@ -169,7 +182,6 @@ function garbageBanner(g: GarbageInfo): string {
 
 // ---- フォーマッタ ----
 
-const fmtTemp = (v: number | null) => (v == null ? "—" : `${Math.round(v)}°`);
 const fmtRange = (p: PeriodWeather) =>
   p.tempMin == null || p.tempMax == null
     ? "—"
@@ -181,29 +193,18 @@ const esc = (s: string) =>
 
 /** Asia/Tokyo の「2026.07.05 (日)」表記 */
 function formatDate(): string {
-  const d = new Date();
-  const ymd = d.toLocaleDateString("en-CA", {
-    timeZone: "Asia/Tokyo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }); // 2026-07-05
-  const wd = d.toLocaleDateString("ja-JP", {
-    timeZone: "Asia/Tokyo",
-    weekday: "short",
-  });
-  return `${ymd.replace(/-/g, ".")} (${wd})`;
+  const { ymd, dow } = jstDate(new Date());
+  return `${ymd.replace(/-/g, ".")} (${WEEKDAY_JA[dow] ?? ""})`;
 }
 
 // ---- 時間帯カード ----
 
-const PERIODS: Array<{ key: "morning" | "afternoon" | "evening"; label: string; hours: string }> = [
-  { key: "morning", label: "朝", hours: "6–11" },
-  { key: "afternoon", label: "昼", hours: "12–17" },
-  { key: "evening", label: "夜", hours: "18–23" },
-];
-
-function periodCard(key: "morning" | "afternoon" | "evening", label: string, hours: string, p: PeriodWeather): string {
+function periodCard(
+  key: PeriodKey,
+  label: string,
+  hours: string,
+  p: PeriodWeather,
+): string {
   const wi = weatherIcon(p.weather, key);
   const prob = p.precipProb;
   const badge =
@@ -237,8 +238,8 @@ export function buildDashboardHtml(r: WeatherResult, g: GarbageInfo): string {
   if (l.bestWindow) laundryHint = `よく乾く ${esc(l.bestWindow)}`;
   else if (l.avoidHours) laundryHint = `外干しを避けたい ${esc(l.avoidHours)}`;
 
-  const periodsHtml = PERIODS.map((d) =>
-    periodCard(d.key, d.label, d.hours, r.periods[d.key]),
+  const periodsHtml = PERIOD_DEFS.map((d) =>
+    periodCard(d.key, d.label, `${d.from}–${d.to}`, r.periods[d.key]),
   ).join("");
 
   return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><style>

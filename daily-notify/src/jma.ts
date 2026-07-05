@@ -8,6 +8,8 @@
 // Open-Meteo の天気コード・気温はすでに気象庁モデル由来なので流用し、
 // 気象庁が「モデルとして」提供しない降水確率だけをここで補う。
 
+import { fetchWithTimeout } from "./lib.js";
+
 const JMA_FORECAST_URL =
   "https://www.jma.go.jp/bosai/forecast/data/forecast/130000.json";
 /** 東京地方（武蔵野市を含む一次細分区域） */
@@ -46,7 +48,7 @@ function isTokyoArea(a: JmaArea): boolean {
  */
 export async function fetchJmaPops(today: string): Promise<JmaPops | null> {
   try {
-    const res = await fetch(JMA_FORECAST_URL);
+    const res = await fetchWithTimeout(JMA_FORECAST_URL);
     if (!res.ok) return null;
     const data = (await res.json()) as JmaForecast[];
     const short = data?.[0];
@@ -69,8 +71,12 @@ export async function fetchJmaPops(today: string): Promise<JmaPops | null> {
     }
 
     return Object.keys(byStartHour).length > 0 ? { byStartHour } : null;
-  } catch {
-    // ネットワーク/パース失敗時は静かに null（通知は止めない）
+  } catch (err) {
+    // ネットワーク/パース失敗時は null で Open-Meteo にフォールバック（通知は止めない）
+    console.warn(
+      "気象庁の降水確率の取得に失敗しました（Open-Meteo にフォールバック）:",
+      err,
+    );
     return null;
   }
 }
