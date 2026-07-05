@@ -57,7 +57,6 @@ function buildLaundryEmbed(r: WeatherResult): Record<string, unknown> {
       value: `**${l.level}**（乾きやすさ ${l.index}/100）\n${l.advice}`,
       inline: false,
     },
-    { name: "根拠", value: l.reason, inline: false },
   ];
   if (l.bestWindow) {
     fields.push({
