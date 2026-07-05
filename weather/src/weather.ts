@@ -35,6 +35,19 @@ export interface LaundryResult {
   avoidHours?: string;
 }
 
+/** 朝・昼・夜など、ある時間帯の天気サマリ */
+export interface PeriodWeather {
+  /** 時間帯ラベル（朝 / 昼 / 夜） */
+  label: string;
+  /** 代表天気（その時間帯で最も顕著なもの）。データが無ければ null */
+  weather: string | null;
+  /** 気温レンジ */
+  tempMin: number | null;
+  tempMax: number | null;
+  /** 最大降水確率 */
+  precipProbMax: number | null;
+}
+
 export interface WeatherResult {
   location: string;
   weather: string;
@@ -45,7 +58,8 @@ export interface WeatherResult {
   precipitationProbabilityMax: number | null;
   precipitationSum: number | null;
   precipitationNow: number | null;
-  umbrella: { needed: string; reason: string };
+  /** 朝(6-11)/昼(12-17)/夜(18-23) の時間帯別サマリ */
+  periods: { morning: PeriodWeather; afternoon: PeriodWeather; evening: PeriodWeather };
   laundry: LaundryResult;
 }
 
@@ -191,6 +205,7 @@ interface ForecastResponse {
     precipitation?: number[];
     precipitation_probability?: number[];
     cloud_cover?: number[];
+    weather_code?: number[];
   };
   daily?: {
     weather_code?: number[];
@@ -213,7 +228,7 @@ async function fetchForecast(loc: Location): Promise<ForecastResponse> {
   );
   url.searchParams.set(
     "hourly",
-    "temperature_2m,relative_humidity_2m,vapour_pressure_deficit,wind_speed_10m,precipitation,precipitation_probability,cloud_cover",
+    "temperature_2m,relative_humidity_2m,vapour_pressure_deficit,wind_speed_10m,precipitation,precipitation_probability,cloud_cover,weather_code",
   );
   url.searchParams.set(
     "daily",
@@ -230,37 +245,65 @@ async function fetchForecast(loc: Location): Promise<ForecastResponse> {
   return (await res.json()) as ForecastResponse;
 }
 
-/** 傘の要否を判定 */
-function judgeUmbrella(
-  probMax: number | null,
-  precipNow: number | null,
-  code: number | null,
-): { needed: string; reason: string } {
-  const prob = probMax ?? 0;
-  if ((precipNow ?? 0) > 0.1) {
-    return { needed: "必要", reason: "現在すでに雨が降っています。" };
-  }
-  if (prob >= 50) {
-    return {
-      needed: "必要",
-      reason: `日中の最大降水確率が ${prob}% と高めです。`,
+// ---- 朝・昼・夜の天気サマリ ----
+
+/** 各時間帯の定義（時の範囲、両端含む） */
+const PERIOD_DEFS: Array<{ key: "morning" | "afternoon" | "evening"; label: string; from: number; to: number }> = [
+  { key: "morning", label: "朝", from: 6, to: 11 },
+  { key: "afternoon", label: "昼", from: 12, to: 17 },
+  { key: "evening", label: "夜", from: 18, to: 23 },
+];
+
+/**
+ * 当日(現在時刻の日付)の hourly を朝/昼/夜にバケット分けし、各時間帯の
+ * 代表天気・気温レンジ・最大降水確率を集計する。
+ * hourly が無い場合は current/daily ベースの空サマリ（weather のみ埋める）を返す。
+ */
+function summarizePeriods(fc: ForecastResponse): WeatherResult["periods"] {
+  const h = fc.hourly;
+  const times = h?.time;
+  const today = (fc.current?.time ?? times?.[0] ?? "").slice(0, 10);
+
+  const build = (def: (typeof PERIOD_DEFS)[number]): PeriodWeather => {
+    const empty: PeriodWeather = {
+      label: def.label,
+      weather: null,
+      tempMin: null,
+      tempMax: null,
+      precipProbMax: null,
     };
-  }
-  if (prob >= 30) {
+    if (!h || !times) return empty;
+
+    const codes: number[] = [];
+    const temps: number[] = [];
+    const probs: number[] = [];
+    for (let i = 0; i < times.length; i++) {
+      if (times[i].slice(0, 10) !== today) continue;
+      const hour = Number(times[i].slice(11, 13));
+      if (hour < def.from || hour > def.to) continue;
+      const c = h.weather_code?.[i];
+      if (c != null) codes.push(c);
+      const t = h.temperature_2m?.[i];
+      if (t != null) temps.push(t);
+      const p = h.precipitation_probability?.[i];
+      if (p != null) probs.push(p);
+    }
+
+    // 代表天気: その時間帯で最も顕著なもの（コード最大＝降水/雪系が優先される）
+    const weather = codes.length ? weatherCodeToJa(Math.max(...codes)) : null;
     return {
-      needed: "折りたたみ傘があると安心",
-      reason: `日中の最大降水確率が ${prob}% です。念のため折りたたみを。`,
+      label: def.label,
+      weather,
+      tempMin: temps.length ? Math.min(...temps) : null,
+      tempMax: temps.length ? Math.max(...temps) : null,
+      precipProbMax: probs.length ? Math.max(...probs) : null,
     };
-  }
-  if (isWetWeather(code)) {
-    return {
-      needed: "折りたたみ傘があると安心",
-      reason: "天気が崩れる可能性があります。",
-    };
-  }
+  };
+
   return {
-    needed: "不要",
-    reason: `日中の最大降水確率は ${prob}% で低めです。`,
+    morning: build(PERIOD_DEFS[0]),
+    afternoon: build(PERIOD_DEFS[1]),
+    evening: build(PERIOD_DEFS[2]),
   };
 }
 
@@ -582,11 +625,7 @@ export async function getTodayWeather(city?: string): Promise<WeatherResult> {
     precipitationProbabilityMax,
     precipitationSum,
     precipitationNow,
-    umbrella: judgeUmbrella(
-      precipitationProbabilityMax,
-      precipitationNow,
-      weatherCode,
-    ),
+    periods: summarizePeriods(fc),
     laundry,
   };
 }
@@ -597,6 +636,15 @@ export function formatWeather(r: WeatherResult): string {
   const fmtPct = (v: number | null) => (v == null ? "—" : `${v}%`);
   const fmtMm = (v: number | null) => (v == null ? "—" : `${v}mm`);
 
+  const fmtRange = (p: PeriodWeather) =>
+    p.tempMin == null || p.tempMax == null
+      ? "—"
+      : `${Math.round(p.tempMin)}〜${Math.round(p.tempMax)}℃`;
+  const fmtPeriod = (p: PeriodWeather) =>
+    `${p.label}: ${p.weather ?? "—"} / ${fmtRange(p)} / 降水 ${fmtPct(
+      p.precipProbMax,
+    )}`;
+
   const lines = [
     `【${r.location} の今日の天気】`,
     ``,
@@ -604,13 +652,9 @@ export function formatWeather(r: WeatherResult): string {
     `気温: 最高 ${fmtTemp(r.temperatureMax)} / 最低 ${fmtTemp(
       r.temperatureMin,
     )}（現在 ${fmtTemp(r.temperatureNow)}）`,
-    `湿度: ${fmtPct(r.humidity)}（現在）`,
-    `降水確率(日中最大): ${fmtPct(r.precipitationProbabilityMax)} / 予想降水量: ${fmtMm(
-      r.precipitationSum,
-    )}`,
-    ``,
-    `☂️ 傘: ${r.umbrella.needed}`,
-    `   ${r.umbrella.reason}`,
+    fmtPeriod(r.periods.morning),
+    fmtPeriod(r.periods.afternoon),
+    fmtPeriod(r.periods.evening),
     ``,
     `🧺 洗濯物: ${r.laundry.advice}`,
     `   乾きやすさ ${r.laundry.index}/100（${r.laundry.level}）`,
