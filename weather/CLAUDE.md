@@ -1,0 +1,69 @@
+# weather/ の開発ガイド
+
+このディレクトリは、天気・洗濯物の判定ロジック（`weather.ts` / `jma.ts`）と、
+それを **1 枚のダッシュボード画像**にして Discord へ通知する処理（`dashboard.ts` /
+`render.ts` / `notify.ts`）で構成される。ダッシュボードに手を入れる・新しいカードや
+指標を追加するときは、以下のデザインシステムに従うこと。
+
+## デザインの方向性
+
+shadcn/ui 風の、モダン・スタイリッシュ・シンプルなダークダッシュボード。
+**天気予報がメイン**（大きく・視認性優先）、**洗濯物などの補助情報はサブ**
+（下部の細いストリップに凝縮）という優先順位を崩さない。新しい指標を足す場合も
+「メインを圧迫しない」を最優先で、まずサブストリップへの追加を検討する。
+
+## 実装場所
+
+- `src/dashboard.ts` — `buildDashboardHtml(r: WeatherResult): string`。HTML/CSS を文字列で組み立てる。
+- `src/render.ts` — Playwright(chromium) で `#card` 要素だけを PNG 化する。
+- レイアウトを変える場合は `dashboard.ts` の `<div id="card">` 配下を編集する。
+  `render.ts` 側は変更不要（要素サイズに追従する）。
+
+## トークン（このまま踏襲する）
+
+- 背景: `#09090b`（カード全体）/ `#18181b`（カード内カード・ストリップ）
+- ボーダー: `#27272a`（1px, `border-radius: 14–16px`）
+- 文字色: 本文 `#fafafa` / 補助 `#a1a1aa` / さらに薄い補助 `#71717a` / フッタ `#52525b`
+- 区切り線: `#18181b`
+- カード幅: 600px（`deviceScaleFactor: 2` で 2x 出力 → 実質 1200px 相当）
+- フォント: `'Noto Sans CJK JP','Hiragino Sans','Noto Sans JP',sans-serif`
+- 数値の強調は `font-weight:500` のみ（太字を多用しない）。ラベルは 11–13px、本体は 14–17px 程度。
+
+## 色の意味づけ（役割ベース。増やすときも同じ考え方で）
+
+- 降水確率バッジ: 30%以上は `rgba(59,130,246,0.15)` 背景 + `#93c5fd` 文字（青系＝注意）、
+  それ未満はニュートラル `#27272a` + `#a1a1aa`。
+- 天気アイコン色: 雨系 `#60a5fa` / 雪系 `#93c5fd` / 晴系 `#fbbf24` / それ以外(曇り・霧・雷) `#94a3b8`。
+- 洗濯スコアの色（`laundryColors()`）: 75+ 緑 `#34d399` / 60+ `#4ade80` / 45+ 黄 `#fbbf24` /
+  25+ 橙 `#fb923c` / それ未満 赤 `#f87171`。新しい指標も「良い→緑、悪い→赤」の同じグラデーションに合わせる。
+- 色を増やすときは、既存の役割（雨=青系、警戒=黄橙赤、晴=黄）を再利用し、無関係な新色を増やさない。
+
+## アイコン
+
+- **絵文字は使わない**。すべて `ICON_PATHS`（lucide 由来の 24x24 line SVG）から `icon(name, size, color)` で描画する。
+  理由: Discord 側ではなく CI(Linux) の headless Chromium で描画するため、絵文字はフォント依存で
+  文字化け（豆腐）しやすい。SVG ならフォント無しで確実に同じ見た目になる。
+- 新しいアイコンが必要なときは、まず `ICON_PATHS` に lucide のパスを追記してから使う。
+  （唯一の例外: `notify.ts` の 1 行テキスト要約は Discord 側がレンダリングするただの文字列なので絵文字可。
+  画像内には絵文字を絶対に埋め込まない。）
+- 天気アイコンは時間帯 (`period: "morning" | "afternoon" | "evening"`) を渡せるようにしてあり、
+  「晴れ・快晴」は夜間だけ月アイコンに、「曇り」は夜間だけ雲+月アイコンにする（`weatherIcon()` 参照）。
+  時間帯に依存する新しいアイコン分岐を足すときもこの仕組みに乗せる。
+
+## 日本語・レンダリング時の注意
+
+- CI (`.github/workflows/weather-notify.yml`) では `fonts-noto-cjk` を apt で入れてから
+  `playwright install --with-deps chromium` する。新しいフォントスタイル（太さなど）を使う場合は
+  そのウェイトが Noto Sans CJK JP に存在するか確認すること。
+- `renderPng()` は `page.setContent(html, { waitUntil: "networkidle" })` を使っている。
+  外部フォント/画像を追加で読み込む場合、CSP 制約下の CDN（cdnjs / jsdelivr / unpkg / Google Fonts）以外は
+  ロードできない点に注意（ネットワーク遮断環境を想定し、基本は外部リソース無しで完結させる）。
+
+## ローカルでの見た目確認
+
+レイアウト・色・アイコンを変更したら、必ず `npm run preview` で PNG を書き出して目視確認してから
+`notify` / commit すること（Discord に実送信する前に確認できる）。
+
+```bash
+npm run preview -- /tmp/preview.png
+```

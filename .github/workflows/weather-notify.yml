@@ -20,6 +20,10 @@ jobs:
           cache: "npm"
           cache-dependency-path: weather/package-lock.json
       - run: npm ci
+      # ダッシュボード画像の日本語描画に必要（豆腐化防止）
+      - run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+      # HTML → PNG 用の chromium（+ OS 依存ライブラリ）
+      - run: npx playwright install --with-deps chromium
       - run: npm run notify
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

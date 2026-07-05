@@ -1,30 +1,30 @@
 # weather-notify
 
-その日の **洗濯物アドバイス** と **天気・気温（朝/昼/夜）** を、毎朝
-**Discord チャンネル**へ自動通知するスクリプト。
+その日の **天気・気温（朝/昼/夜）** と **洗濯物アドバイス** を、毎朝
+**1 枚のダッシュボード画像**にして **Discord チャンネル**へ自動通知するスクリプト。
 
 - 天気・気温データ: [Open-Meteo](https://open-meteo.com/)（API キー不要。日本では**気象庁(JMA)モデル**由来）
 - 降水確率データ: **気象庁公式**の予報 JSON（東京地方の6時間ブロック。ニュース／tenki.jp と同系統）
 - 対象地点: **東京都武蔵野市**（固定）
 - 実行: **GitHub Actions の cron**（毎朝 7:00 JST）
-- 送信: **Discord Webhook**（Bot 不要）・Embed 形式
+- 送信: **Discord Webhook**（Bot 不要）・**画像を直接アップロード**（multipart/form-data）
+- 描画: HTML（shadcn/ui 風のダークカード）→ **Playwright(chromium) で PNG 化**
 - LLM は使いません（すべて決定的ロジックで完結）
 
-## 通知内容（Discord へ 2 通）
+## 通知内容（Discord へ 1 通）
 
-毎回 **2 つのメッセージ**を、この順で送信します。
+**1 枚のダッシュボード画像**＋**1 行のテキスト要約**を送信します。
 
-**1 通目 — 🧺 洗濯物**
-- 乾きやすさスコア(0-100)・判定（外干し〜部屋干し+除湿）
-- 判定根拠（VPD・湿度・風・雲量・降水）
-- 最も乾きやすい時間帯 / 外干しを避けたい時間帯
-
-**2 通目 — 天気・気温**
-- 🌅 朝(6-11) / ☀️ 昼(12-17) / 🌙 夜(18-23) ごとに、**天気・気温レンジ・降水確率**
-- 本日の最高 / 最低気温
-- 天気は「その時間帯の最頻（家族単位）」で代表。タイトルは 6-23 時の代表（例「曇り 時々 霧雨」）
+画像（**天気予報がメイン**・洗濯物はサブ）:
+- 🌅 朝(6-11) / ☀️ 昼(12-17) / 🌙 夜(18-23) の 3 カード（**天気・気温レンジ・降水確率**）を大きく表示
+- ヘッダに地点・日付・当日の代表天気・最高／最低気温
+- 下部の細いストリップに洗濯物（レベル・スコア・アドバイス／干し時間帯）をサブ表示
+- 天気は「その時間帯の最頻（家族単位）」で代表。代表天気は 6-23 時の集約（例「曇り 時々 霧雨」）
 - **降水確率は気象庁公式**（東京地方の6時間ブロック）。朝=06時 / 昼=12時 / 夜=18時ブロックを割当。
   過去で欠けた帯や気象庁が取得できない場合は Open-Meteo の平均にフォールバック
+
+テキスト要約（通知プレビュー・検索用の 1 行）:
+- 例: `☁️ 東京都武蔵野市 曇り 時々 霧雨 24°/21°・洗濯: 乾きにくい(32)`
 
 判定のしきい値:
 - **洗濯物（乾きやすさスコア 0-100）**:
@@ -60,10 +60,18 @@
 ```bash
 cd weather
 npm install
+npx playwright install chromium   # 初回のみ（HTML→PNG 用ブラウザ）
+
+# 画像だけローカルに書き出して見た目を確認（Discord へは送らない）
+npm run preview            # ./preview.png を生成
+npm run preview -- out.png # 出力先を指定
+
+# 実際に Discord へ 1 通（画像＋1行要約）送る
 DISCORD_WEBHOOK_URL="<あなたの Webhook URL>" npm run notify
 ```
 
-Discord チャンネルに 2 通（洗濯物 → 天気）が届けば OK。型チェックは `npm run typecheck`。
+型チェックは `npm run typecheck`。日本語フォントはローカル（macOS の Hiragino 等）で
+自動的に使われます。CI では `fonts-noto-cjk` を導入して描画します。
 
 ## 手動実行（GitHub 上でのテスト）
 
@@ -85,7 +93,10 @@ weather/
 ├── package.json
 ├── tsconfig.json
 └── src/
-    ├── notify.ts     # 取得 → 洗濯物/天気の2 Embed 構築 → Webhook へ順に POST（エントリ）
+    ├── notify.ts     # 取得 → 画像生成 → Webhook へ画像1枚+1行要約を POST（エントリ）
+    ├── preview.ts    # 画像をローカルPNGへ書き出す確認用エントリ
+    ├── dashboard.ts  # WeatherResult → ダッシュボードHTML（shadcn風ダーク・SVGアイコン）
+    ├── render.ts     # HTML → PNG（Playwright/chromium）
     ├── weather.ts    # Open-Meteo 取得 + 朝昼夜サマリ + 洗濯物(VPDベース乾きやすさスコア) 判定
     └── jma.ts        # 気象庁公式JSONから降水確率(東京地方・6時間ブロック)を取得
 .github/workflows/weather-notify.yml   # cron（毎朝7:00 JST）+ 手動実行

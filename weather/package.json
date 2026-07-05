@@ -1,12 +1,16 @@
 {
   "name": "weather-notify",
   "version": "1.0.0",
-  "description": "その日の洗濯物アドバイスと天気・気温・降水確率（朝昼夜）を Discord チャンネルへ毎日通知するスクリプト",
+  "description": "その日の天気・気温・降水確率（朝昼夜）と洗濯物アドバイスを 1 枚のダッシュボード画像にして Discord チャンネルへ毎日通知するスクリプト",
   "private": true,
   "type": "module",
   "scripts": {
     "notify": "tsx src/notify.ts",
+    "preview": "tsx src/preview.ts",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "playwright": "^1.49.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
