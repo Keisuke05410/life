@@ -1,3 +1,5 @@
+import { fetchJmaPops, type JmaPops } from "./jma.js";
+
 // Open-Meteo を使った天気取得と、傘・洗濯物の判定ロジック。
 // API キー不要。ジオコーディングも Open-Meteo の無料 API を使う。
 //
@@ -44,8 +46,8 @@ export interface PeriodWeather {
   /** 気温レンジ */
   tempMin: number | null;
   tempMax: number | null;
-  /** 最大降水確率 */
-  precipProbMax: number | null;
+  /** 降水確率(%)。気象庁の6時間ブロック値。無ければ Open-Meteo の平均。 */
+  precipProb: number | null;
 }
 
 export interface WeatherResult {
@@ -105,6 +107,85 @@ function isWetWeather(code: number | null | undefined): boolean {
   if (code == null) return false;
   // 霧雨/雨/雪/にわか/雷雨 系
   return code >= 51;
+}
+
+// ---- 天気コードの「家族(family)」分類 ----
+// 時間帯の代表天気は「最悪の1時間(Math.max)」ではなく、家族単位の最頻で決める。
+// これにより「昼は霧雨1時間だけなのに弱い霧雨」「深夜の最悪コードでタイトルが強い霧雨」
+// といった過度に雨寄りの表示を避け、tenki.jp/気象庁の「曇り時々雨」的な表現に近づける。
+
+type WeatherFamily =
+  | "clear"
+  | "cloud"
+  | "fog"
+  | "drizzle"
+  | "rain"
+  | "snow"
+  | "thunder";
+
+/** 軽い→重い の順（同数タイのとき重い家族を代表に選ぶための順序） */
+const FAMILY_SEVERITY: WeatherFamily[] = [
+  "clear",
+  "cloud",
+  "fog",
+  "drizzle",
+  "rain",
+  "snow",
+  "thunder",
+];
+
+const FAMILY_LABEL: Record<WeatherFamily, string> = {
+  clear: "晴れ",
+  cloud: "曇り",
+  fog: "霧",
+  drizzle: "霧雨",
+  rain: "雨",
+  snow: "雪",
+  thunder: "雷雨",
+};
+
+function codeFamily(code: number): WeatherFamily {
+  if (code <= 1) return "clear"; // 0 快晴 / 1 晴れ
+  if (code <= 3) return "cloud"; // 2 一部曇り / 3 曇り
+  if (code === 45 || code === 48) return "fog";
+  if (code >= 51 && code <= 57) return "drizzle"; // 霧雨系
+  if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return "rain";
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return "snow";
+  if (code >= 95) return "thunder";
+  return "cloud";
+}
+
+/** コード群を家族ごとに数える */
+function familyCounts(codes: number[]): Map<WeatherFamily, number> {
+  const m = new Map<WeatherFamily, number>();
+  for (const c of codes) {
+    const f = codeFamily(c);
+    m.set(f, (m.get(f) ?? 0) + 1);
+  }
+  return m;
+}
+
+/** 最多家族（同数なら重い家族）を返す。空なら null。 */
+function dominantFamily(codes: number[]): WeatherFamily | null {
+  if (codes.length === 0) return null;
+  const counts = familyCounts(codes);
+  let best: WeatherFamily | null = null;
+  let bestCount = -1;
+  // 軽い→重い順に走査し、同数のとき後勝ち＝重い家族を採用
+  for (const f of FAMILY_SEVERITY) {
+    const cnt = counts.get(f) ?? 0;
+    if (cnt > 0 && cnt >= bestCount) {
+      best = f;
+      bestCount = cnt;
+    }
+  }
+  return best;
+}
+
+/** 時間帯の代表天気ラベル（家族単位）。空なら null。 */
+function representativeWeatherLabel(codes: number[]): string | null {
+  const fam = dominantFamily(codes);
+  return fam ? FAMILY_LABEL[fam] : null;
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -256,10 +337,15 @@ const PERIOD_DEFS: Array<{ key: "morning" | "afternoon" | "evening"; label: stri
 
 /**
  * 当日(現在時刻の日付)の hourly を朝/昼/夜にバケット分けし、各時間帯の
- * 代表天気・気温レンジ・最大降水確率を集計する。
- * hourly が無い場合は current/daily ベースの空サマリ（weather のみ埋める）を返す。
+ * 代表天気・気温レンジ・降水確率を集計する。
+ * - 天気: 家族単位の最頻（Math.max による「最悪の1時間」ではない）。
+ * - 降水確率: 気象庁の6時間ブロック値を最優先。無ければ Open-Meteo の平均。
+ * hourly が無い場合は空サマリ（すべて null）を返す。
  */
-function summarizePeriods(fc: ForecastResponse): WeatherResult["periods"] {
+function summarizePeriods(
+  fc: ForecastResponse,
+  jmaPops: JmaPops | null,
+): WeatherResult["periods"] {
   const h = fc.hourly;
   const times = h?.time;
   const today = (fc.current?.time ?? times?.[0] ?? "").slice(0, 10);
@@ -270,7 +356,7 @@ function summarizePeriods(fc: ForecastResponse): WeatherResult["periods"] {
       weather: null,
       tempMin: null,
       tempMax: null,
-      precipProbMax: null,
+      precipProb: null,
     };
     if (!h || !times) return empty;
 
@@ -289,14 +375,19 @@ function summarizePeriods(fc: ForecastResponse): WeatherResult["periods"] {
       if (p != null) probs.push(p);
     }
 
-    // 代表天気: その時間帯で最も顕著なもの（コード最大＝降水/雪系が優先される）
-    const weather = codes.length ? weatherCodeToJa(Math.max(...codes)) : null;
+    // 降水確率: 気象庁の該当ブロック（開始時=def.from）を最優先、無ければ Open-Meteo 平均
+    const jma = jmaPops?.byStartHour[def.from];
+    const omMean = probs.length
+      ? Math.round(probs.reduce((a, b) => a + b, 0) / probs.length)
+      : null;
+    const precipProb = jma != null ? jma : omMean;
+
     return {
       label: def.label,
-      weather,
+      weather: representativeWeatherLabel(codes),
       tempMin: temps.length ? Math.min(...temps) : null,
       tempMax: temps.length ? Math.max(...temps) : null,
-      precipProbMax: probs.length ? Math.max(...probs) : null,
+      precipProb,
     };
   };
 
@@ -305,6 +396,52 @@ function summarizePeriods(fc: ForecastResponse): WeatherResult["periods"] {
     afternoon: build(PERIOD_DEFS[1]),
     evening: build(PERIOD_DEFS[2]),
   };
+}
+
+/**
+ * タイトル用の当日代表天気。6-23時の hourly から主家族を選び、
+ * 副家族が全体の25%以上あれば「主 時々 副」に整形する（例「曇り 時々 霧雨」）。
+ * hourly が無ければ null。
+ */
+function dayRepresentativeWeather(
+  fc: ForecastResponse,
+  today: string,
+): string | null {
+  const h = fc.hourly;
+  const times = h?.time;
+  if (!h || !times || !h.weather_code) return null;
+
+  const codes: number[] = [];
+  for (let i = 0; i < times.length; i++) {
+    if (times[i].slice(0, 10) !== today) continue;
+    const hour = Number(times[i].slice(11, 13));
+    if (hour < 6 || hour > 23) continue;
+    const c = h.weather_code[i];
+    if (c != null) codes.push(c);
+  }
+  if (codes.length === 0) return null;
+
+  const mainFam = dominantFamily(codes);
+  if (!mainFam) return null;
+  const counts = familyCounts(codes);
+
+  // 副家族: 主家族以外で最多（同数なら重い家族）
+  let subFam: WeatherFamily | null = null;
+  let subCount = 0;
+  for (const f of FAMILY_SEVERITY) {
+    if (f === mainFam) continue;
+    const cnt = counts.get(f) ?? 0;
+    if (cnt > 0 && cnt >= subCount) {
+      subFam = f;
+      subCount = cnt;
+    }
+  }
+
+  const mainLabel = FAMILY_LABEL[mainFam];
+  if (subFam && subCount / codes.length >= 0.25) {
+    return `${mainLabel} 時々 ${FAMILY_LABEL[subFam]}`;
+  }
+  return mainLabel;
 }
 
 // ---- 洗濯物: 乾きやすさスコア ----
@@ -590,6 +727,9 @@ export async function getTodayWeather(city?: string): Promise<WeatherResult> {
   }
 
   const fc = await fetchForecast(loc);
+  const today = (fc.current?.time ?? fc.hourly?.time?.[0] ?? "").slice(0, 10);
+  // 降水確率は気象庁公式から（東京地方の6時間ブロック）。失敗時は null → Open-Meteo にフォールバック。
+  const jmaPops = await fetchJmaPops(today);
 
   const weatherCode = fc.daily?.weather_code?.[0] ?? fc.current?.weather_code ?? null;
   const temperatureMax = fc.daily?.temperature_2m_max?.[0] ?? null;
@@ -617,7 +757,8 @@ export async function getTodayWeather(city?: string): Promise<WeatherResult> {
 
   return {
     location: loc.name,
-    weather: weatherCodeToJa(weatherCode),
+    // タイトルの天気は 6-23時の代表（「曇り 時々 霧雨」等）。hourly が無ければ daily コード。
+    weather: dayRepresentativeWeather(fc, today) ?? weatherCodeToJa(weatherCode),
     temperatureMax,
     temperatureMin,
     temperatureNow,
@@ -625,7 +766,7 @@ export async function getTodayWeather(city?: string): Promise<WeatherResult> {
     precipitationProbabilityMax,
     precipitationSum,
     precipitationNow,
-    periods: summarizePeriods(fc),
+    periods: summarizePeriods(fc, jmaPops),
     laundry,
   };
 }
@@ -642,7 +783,7 @@ export function formatWeather(r: WeatherResult): string {
       : `${Math.round(p.tempMin)}〜${Math.round(p.tempMax)}℃`;
   const fmtPeriod = (p: PeriodWeather) =>
     `${p.label}: ${p.weather ?? "—"} / ${fmtRange(p)} / 降水 ${fmtPct(
-      p.precipProbMax,
+      p.precipProb,
     )}`;
 
   const lines = [

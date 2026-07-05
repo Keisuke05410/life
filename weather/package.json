@@ -1,7 +1,7 @@
 {
   "name": "weather-notify",
   "version": "1.0.0",
-  "description": "その日の天気・気温・湿度・傘の要否・洗濯物の判定を Discord チャンネルへ毎日通知するスクリプト",
+  "description": "その日の洗濯物アドバイスと天気・気温・降水確率（朝昼夜）を Discord チャンネルへ毎日通知するスクリプト",
   "private": true,
   "type": "module",
   "scripts": {

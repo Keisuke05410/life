@@ -94,7 +94,7 @@ function weatherColor(weather: string): number {
 function periodField(emoji: string, p: PeriodWeather): DiscordEmbedField {
   return {
     name: `${emoji} ${p.label}`,
-    value: `${p.weather ?? "—"}\n${fmtRange(p)}\n降水 ${fmtPct(p.precipProbMax)}`,
+    value: `${p.weather ?? "—"}\n${fmtRange(p)}\n降水 ${fmtPct(p.precipProb)}`,
     inline: true,
   };
 }
@@ -121,11 +121,14 @@ function buildWeatherEmbed(r: WeatherResult): Record<string, unknown> {
     },
   ];
 
+  // 「曇り 時々 霧雨」のような複合表記では主天気（先頭語）で絵文字・色を決める
+  const mainWeather = r.weather.split(/\s/)[0] || r.weather;
+
   return {
-    title: `${weatherEmoji(r.weather)} ${r.location}の今日の天気: ${r.weather}`,
-    color: weatherColor(r.weather),
+    title: `${weatherEmoji(mainWeather)} ${r.location}の今日の天気: ${r.weather}`,
+    color: weatherColor(mainWeather),
     fields,
-    footer: { text: `${today} ・ データ: Open-Meteo` },
+    footer: { text: `${today} ・ 降水確率: 気象庁 / 天気・気温: Open-Meteo` },
   };
 }
 
