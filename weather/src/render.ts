@@ -9,7 +9,8 @@ export async function renderPng(html: string): Promise<Buffer> {
     const page = await browser.newPage({ deviceScaleFactor: 2 });
     await page.setContent(html, { waitUntil: "networkidle" });
     const card = page.locator("#card");
-    const buf = await card.screenshot({ type: "png" });
+    // 角丸の外側は透明にする（省略するとデフォルトの白背景で四隅が塗られてしまう）
+    const buf = await card.screenshot({ type: "png", omitBackground: true });
     return buf;
   } finally {
     await browser.close();
